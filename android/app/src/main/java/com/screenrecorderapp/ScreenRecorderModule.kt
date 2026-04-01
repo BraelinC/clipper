@@ -34,6 +34,7 @@ class ScreenRecorderModule(reactContext: ReactApplicationContext) :
 
     companion object {
         private const val REQUEST_CODE = 1000
+        private const val PICK_VIDEO_CODE = 1001
         private const val EVENT_RECORDING_STARTED = "onRecordingStarted"
         private const val EVENT_RECORDING_STOPPED = "onRecordingStopped"
         private const val EVENT_RECORDING_ERROR = "onRecordingError"
@@ -52,6 +53,7 @@ class ScreenRecorderModule(reactContext: ReactApplicationContext) :
     }
 
     private var recordingPromise: Promise? = null
+    private var pickVideoPromise: Promise? = null
     private var recordingMode: String = "fullscreen"
 
     init {
@@ -477,6 +479,32 @@ class ScreenRecorderModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun removeListeners(count: Int) {}
 
+    @ReactMethod
+    fun pickVideo(promise: Promise) {
+        val activity = reactApplicationContext.currentActivity
+        if (activity == null) {
+            promise.reject("NO_ACTIVITY", "Activity not available")
+            return
+        }
+        pickVideoPromise = promise
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+        }
+        activity.startActivityForResult(intent, PICK_VIDEO_CODE)
+    }
+
+    private fun copyUriToFile(uri: Uri): String {
+        val ctx = reactApplicationContext
+        val dir = File(ctx.getExternalFilesDir(null), "imports")
+        dir.mkdirs()
+        val outFile = File(dir, "import_${System.currentTimeMillis()}.mp4")
+        ctx.contentResolver.openInputStream(uri)?.use { input ->
+            outFile.outputStream().use { output -> input.copyTo(output) }
+        }
+        return outFile.absolutePath
+    }
+
     private fun sendEvent(eventName: String, params: WritableMap?) {
         reactApplicationContext
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
@@ -486,9 +514,7 @@ class ScreenRecorderModule(reactContext: ReactApplicationContext) :
     override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == REQUEST_CODE) {
             if (resultCode == Activity.RESULT_OK && data != null) {
-                // Start the foreground service with the projection result
                 RecordingService.start(reactApplicationContext, resultCode, data)
-
                 recordingPromise?.resolve(true)
                 sendEvent(EVENT_RECORDING_STARTED, Arguments.createMap().apply {
                     putString("mode", recordingMode)
@@ -500,6 +526,21 @@ class ScreenRecorderModule(reactContext: ReactApplicationContext) :
                 })
             }
             recordingPromise = null
+        } else if (requestCode == PICK_VIDEO_CODE) {
+            if (resultCode == Activity.RESULT_OK && data?.data != null) {
+                Thread {
+                    try {
+                        val path = copyUriToFile(data.data!!)
+                        pickVideoPromise?.resolve(path)
+                    } catch (e: Exception) {
+                        pickVideoPromise?.reject("PICK_ERROR", "Failed to import video: ${e.message}")
+                    }
+                    pickVideoPromise = null
+                }.start()
+            } else {
+                pickVideoPromise?.reject("CANCELLED", "Video selection cancelled")
+                pickVideoPromise = null
+            }
         }
     }
 

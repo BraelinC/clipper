@@ -34,6 +34,20 @@ type Segment = { start: number; end: number; speed: number; crop: Crop };
 
 const STORAGE_KEY = '@recordings';
 const NO_CROP: Crop = { top: '0', bottom: '0', left: '0', right: '0' };
+const CONVEX_URL = 'https://formal-weasel-180.convex.cloud';
+
+const saveClipToConvex = async (url: string, title: string, source: 'recorded' | 'uploaded' | 'edited', duration?: number, fileSize?: number) => {
+  try {
+    await fetch(`${CONVEX_URL}/api/mutation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: 'clips:create',
+        args: { title, url, source, duration, fileSize },
+      }),
+    });
+  } catch {}
+};
 const SEG_COLORS = ['#2ed573', '#ffa502', '#ff6b81', '#70a1ff', '#a29bfe', '#fd79a8', '#55efc4'];
 const THUMB_COUNT = 20;
 const HANDLE_W = 16;
@@ -557,8 +571,14 @@ function AppContent() {
   const uploadToCloud = async () => {
     if (!videoPath) return;
     setUploading(true);
-    try { const url = await ScreenRecorderModule.uploadToCloud(videoPath); setUploading(false); Alert.alert('Uploaded', url); }
-    catch (e: any) { setUploading(false); Alert.alert('Failed', e?.message || ''); }
+    try {
+      const url = await ScreenRecorderModule.uploadToCloud(videoPath);
+      const title = videoPath.split('/').pop() || 'clip';
+      const source = hasEditedRef.current ? 'edited' : 'recorded';
+      await saveClipToConvex(url, title, source, duration > 0 ? duration : undefined);
+      setUploading(false);
+      Alert.alert('Uploaded', url);
+    } catch (e: any) { setUploading(false); Alert.alert('Failed', e?.message || ''); }
   };
 
   // ========== SCREENS ==========
@@ -575,10 +595,22 @@ function AppContent() {
           </View>
           {isRecording && <Text style={S.hint}>Pull down notification and tap STOP</Text>}
           {!isRecording && (
-            <TouchableOpacity style={S.recBtn} onPress={startRecording}>
-              <View style={S.recDot} />
-              <Text style={S.recText}>Start Recording</Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity style={S.recBtn} onPress={startRecording}>
+                <View style={S.recDot} />
+                <Text style={S.recText}>Start Recording</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={S.importBtn} onPress={async () => {
+                try {
+                  const path = await ScreenRecorderModule.pickVideo();
+                  hasEditedRef.current = true;
+                  setVideoPath(path);
+                  saveRecording(path);
+                } catch {}
+              }}>
+                <Text style={S.importText}>Import Video</Text>
+              </TouchableOpacity>
+            </>
           )}
           {!isRecording && recordings.length > 0 && (
             <View style={{ marginTop: 25 }}>
@@ -820,6 +852,8 @@ const S = StyleSheet.create({
   recBtn: { padding: 20, borderRadius: 12, backgroundColor: '#ff4757', alignItems: 'center', marginTop: 20 },
   recDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff', marginBottom: 8 },
   recText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  importBtn: { padding: 16, borderRadius: 12, backgroundColor: '#0f3460', alignItems: 'center', marginTop: 12, borderWidth: 1, borderColor: '#70a1ff' },
+  importText: { color: '#70a1ff', fontSize: 16, fontWeight: '700' },
 
   editHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   editTitle: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
