@@ -24,6 +24,8 @@ import Video from 'react-native-video';
 import { GestureHandlerRootView, Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import EditsScreen from './src/screens/EditsScreen';
+import EditReviewView from './src/screens/EditReviewView';
 
 const { ScreenRecorderModule } = NativeModules;
 const SCREEN_W = Dimensions.get('window').width;
@@ -34,7 +36,9 @@ type Segment = { start: number; end: number; speed: number; crop: Crop };
 
 const STORAGE_KEY = '@recordings';
 const NO_CROP: Crop = { top: '0', bottom: '0', left: '0', right: '0' };
-const CONVEX_URL = 'https://formal-weasel-180.convex.cloud';
+const CONVEX_URL = 'https://wary-panther-105.convex.cloud';
+
+type Tab = 'record' | 'edits';
 
 const saveClipToConvex = async (url: string, title: string, source: 'recorded' | 'uploaded' | 'edited', duration?: number, fileSize?: number) => {
   try {
@@ -59,15 +63,91 @@ const fmt = (s: number) => {
 };
 
 function App() {
+  const [activeTab, setActiveTab] = useState<Tab>('record');
+  const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar barStyle="light-content" backgroundColor="#1a1a2e" />
-        <AppContent />
+
+        {/* Screen Content */}
+        {activeTab === 'record' && <AppContent />}
+        {activeTab === 'edits' && !selectedEditId && (
+          <EditsScreen onSelectEdit={(id) => setSelectedEditId(id)} />
+        )}
+        {activeTab === 'edits' && selectedEditId && (
+          <EditReviewView
+            editId={selectedEditId}
+            onBack={() => setSelectedEditId(null)}
+          />
+        )}
+
+        {/* Tab Bar */}
+        <TabBar activeTab={activeTab} onTabChange={(tab) => {
+          setActiveTab(tab);
+          setSelectedEditId(null);
+        }} />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
+
+function TabBar({ activeTab, onTabChange }: { activeTab: Tab; onTabChange: (tab: Tab) => void }) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={[TAB.container, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+      <TouchableOpacity
+        style={[TAB.tab, activeTab === 'record' && TAB.activeTab]}
+        onPress={() => onTabChange('record')}
+      >
+        <Text style={[TAB.icon, activeTab === 'record' && TAB.activeIcon]}>⏺</Text>
+        <Text style={[TAB.label, activeTab === 'record' && TAB.activeLabel]}>Record</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[TAB.tab, activeTab === 'edits' && TAB.activeTab]}
+        onPress={() => onTabChange('edits')}
+      >
+        <Text style={[TAB.icon, activeTab === 'edits' && TAB.activeIcon]}>🎬</Text>
+        <Text style={[TAB.label, activeTab === 'edits' && TAB.activeLabel]}>Edits</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const TAB = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    backgroundColor: '#16213e',
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+    paddingTop: 8,
+  },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  activeTab: {},
+  icon: {
+    fontSize: 20,
+    marginBottom: 4,
+    opacity: 0.5,
+  },
+  activeIcon: {
+    opacity: 1,
+  },
+  label: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '600',
+  },
+  activeLabel: {
+    color: '#6c5ce7',
+  },
+});
 
 // ==================== FILMSTRIP TIMELINE ====================
 
