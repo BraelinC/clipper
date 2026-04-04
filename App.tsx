@@ -661,6 +661,55 @@ function AppContent() {
     } catch (e: any) { setUploading(false); Alert.alert('Failed', e?.message || ''); }
   };
 
+  const [sendingForEdit, setSendingForEdit] = useState(false);
+
+  const sendForAIEdit = async () => {
+    if (!videoPath) return;
+    setSendingForEdit(true);
+    try {
+      // 1. Upload video to cloud
+      const url = await ScreenRecorderModule.uploadToCloud(videoPath);
+      const title = videoPath.split('/').pop() || 'clip';
+      
+      // 2. Create clip in Convex
+      const clipResponse = await fetch(`${CONVEX_URL}/api/mutation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: 'clips:create',
+          args: { 
+            title, 
+            url, 
+            source: 'recorded',
+            duration: duration > 0 ? duration : undefined,
+          },
+        }),
+      });
+      const clipData = await clipResponse.json();
+      const clipId = clipData.value;
+      
+      // 3. Create edit request in Convex
+      await fetch(`${CONVEX_URL}/api/mutation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: 'edits:create',
+          args: { 
+            clipId,
+            prompt: 'Awaiting AI edit instructions',
+            status: 'pending',
+          },
+        }),
+      });
+      
+      setSendingForEdit(false);
+      Alert.alert('Sent!', 'Video sent to Edits tab. Check the Edits tab to review when AI processing is complete.');
+    } catch (e: any) { 
+      setSendingForEdit(false); 
+      Alert.alert('Failed', e?.message || 'Could not send for editing'); 
+    }
+  };
+
   // ========== SCREENS ==========
 
   // HOME
@@ -913,6 +962,9 @@ function AppContent() {
         <TouchableOpacity style={[S.purpleBtn, uploading && S.disabled]} onPress={uploadToCloud} disabled={uploading}>
           <Text style={S.purpleBtnText}>{uploading ? 'Uploading...' : 'Upload to Cloud'}</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={[S.aiEditBtn, sendingForEdit && S.disabled]} onPress={sendForAIEdit} disabled={sendingForEdit}>
+          <Text style={S.aiEditBtnText}>{sendingForEdit ? 'Sending...' : '🤖 Send for AI Edit'}</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={S.ghostBtn} onPress={() => { hasEditedRef.current = false; setVideoPath(null); setEditMode(false); }}>
           <Text style={S.ghostText}>New Recording</Text>
         </TouchableOpacity>
@@ -991,6 +1043,8 @@ const S = StyleSheet.create({
   greenBtnText: { color: '#1a1a2e', fontSize: 15, fontWeight: '600' },
   purpleBtn: { padding: 15, borderRadius: 12, backgroundColor: '#6c5ce7', alignItems: 'center', marginBottom: 10 },
   purpleBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  aiEditBtn: { padding: 16, borderRadius: 12, backgroundColor: '#e84393', alignItems: 'center', marginBottom: 10, borderWidth: 2, borderColor: '#fd79a8' },
+  aiEditBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
   ghostBtn: { padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#555', alignItems: 'center' },
   ghostText: { color: '#9e9e9e', fontSize: 14 },
 
