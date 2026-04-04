@@ -13,6 +13,8 @@ export default defineSchema({
     ),
     duration: v.optional(v.number()),
     fileSize: v.optional(v.number()),
+    createdAt: v.optional(v.number()),
+    status: v.optional(v.string()),
   }),
 
   // AI-generated edits of clips
@@ -38,5 +40,14 @@ export default defineSchema({
     approved: v.boolean(),
     feedback: v.optional(v.string()),
     approvedAt: v.number(),
+  }).index("by_edit", ["editId"]),
+
+  // Chat messages for edit conversations
+  editMessages: defineTable({
+    editId: v.id("edits"),
+    role: v.union(v.literal("user"), v.literal("assistant")),
+    content: v.string(),
+    videoUrl: v.optional(v.string()), // For assistant video responses
+    thumbnailUrl: v.optional(v.string()),
   }).index("by_edit", ["editId"]),
 });
