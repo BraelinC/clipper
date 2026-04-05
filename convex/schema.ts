@@ -30,6 +30,11 @@ export default defineSchema({
     outputUrl: v.optional(v.string()),
     thumbnailUrl: v.optional(v.string()),
     error: v.optional(v.string()),
+    // Streaming support
+    thinking: v.optional(v.boolean()),
+    streaming: v.optional(v.boolean()),
+    streamingContent: v.optional(v.string()),
+    silasConversationId: v.optional(v.string()), // Silas Chat conversation ID
   })
     .index("by_clip", ["clipId"])
     .index("by_status", ["status"]),

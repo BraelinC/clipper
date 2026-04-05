@@ -92,3 +92,51 @@ export const updateStatus = mutation({
     await ctx.db.patch(editId, filteredUpdates);
   },
 });
+
+// Set thinking state (AI is processing)
+export const setThinking = mutation({
+  args: {
+    editId: v.id("edits"),
+    thinking: v.boolean(),
+    silasConversationId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.editId, {
+      thinking: args.thinking,
+      silasConversationId: args.silasConversationId,
+      // Clear streaming when starting to think
+      ...(args.thinking ? { streaming: false, streamingContent: "" } : {}),
+    });
+  },
+});
+
+// Update streaming content (real-time response)
+export const updateStreaming = mutation({
+  args: {
+    editId: v.id("edits"),
+    streaming: v.boolean(),
+    streamingContent: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.editId, {
+      streaming: args.streaming,
+      streamingContent: args.streamingContent ?? "",
+      // Turn off thinking when streaming starts
+      ...(args.streaming ? { thinking: false } : {}),
+    });
+  },
+});
+
+// Clear streaming state (response complete)
+export const clearStreaming = mutation({
+  args: {
+    editId: v.id("edits"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.editId, {
+      thinking: false,
+      streaming: false,
+      streamingContent: "",
+    });
+  },
+});

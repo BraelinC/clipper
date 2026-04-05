@@ -51,6 +51,7 @@ export default function EditReviewView({ editId, onBack }: Props) {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
+  const [streamingContent, setStreamingContent] = useState('');
   const [playingVideo, setPlayingVideo] = useState<string | null>(null);
   const [videoExpanded, setVideoExpanded] = useState(false);
 
@@ -142,10 +143,10 @@ export default function EditReviewView({ editId, onBack }: Props) {
       const processData = await processRes.json();
       const { conversationId } = processData;
 
-      // 3. Poll for AI response
+      // 3. Poll for AI response with streaming updates
       if (conversationId) {
         let attempts = 0;
-        const maxAttempts = 60; // 60 seconds max for local model
+        const maxAttempts = 120; // 2 minutes max for local model
 
         const pollInterval = setInterval(async () => {
           attempts++;
@@ -158,9 +159,16 @@ export default function EditReviewView({ editId, onBack }: Props) {
 
             if (pollRes.ok) {
               const pollData = await pollRes.json();
+
+              // Show streaming content (tool calls, partial responses)
+              if (pollData.status === 'streaming' && pollData.streamingContent) {
+                setStreamingContent(pollData.streamingContent);
+              }
+
               if (pollData.status === 'complete') {
                 clearInterval(pollInterval);
                 setAiThinking(false);
+                setStreamingContent('');
                 await fetchData();
               }
             }
@@ -171,8 +179,9 @@ export default function EditReviewView({ editId, onBack }: Props) {
           if (attempts >= maxAttempts) {
             clearInterval(pollInterval);
             setAiThinking(false);
+            setStreamingContent('');
           }
-        }, 1000);
+        }, 500); // Poll every 500ms for smoother streaming
       } else {
         setAiThinking(false);
       }
@@ -311,14 +320,18 @@ export default function EditReviewView({ editId, onBack }: Props) {
               )}
             </View>
           ))}
-          {/* AI Thinking indicator */}
+          {/* AI Thinking/Streaming indicator */}
           {aiThinking && (
             <View style={[S.messageBubble, S.assistantBubble]}>
               <Text style={S.assistantLabel}>Qwen Local</Text>
-              <View style={S.thinkingRow}>
-                <ActivityIndicator size="small" color="#a29bfe" />
-                <Text style={S.thinkingText}>Thinking...</Text>
-              </View>
+              {streamingContent ? (
+                <Text style={S.streamingText}>{streamingContent}▋</Text>
+              ) : (
+                <View style={S.thinkingRow}>
+                  <ActivityIndicator size="small" color="#a29bfe" />
+                  <Text style={S.thinkingText}>Thinking...</Text>
+                </View>
+              )}
             </View>
           )}
           </>
@@ -558,5 +571,12 @@ const S = StyleSheet.create({
     fontSize: 14,
     marginLeft: 8,
     fontStyle: 'italic',
+  },
+  // Streaming content (tool calls, partial responses)
+  streamingText: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 21,
+    opacity: 0.9,
   },
 });

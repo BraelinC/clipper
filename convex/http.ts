@@ -19,7 +19,7 @@ http.route({
       if (!editId || !message) {
         return new Response(JSON.stringify({ error: "Missing editId or message" }), {
           status: 400,
-          headers: { "Content-Type": "application/json" },
+          headers: corsHeaders(),
         });
       }
 
@@ -28,7 +28,7 @@ http.route({
       if (!edit) {
         return new Response(JSON.stringify({ error: "Edit not found" }), {
           status: 404,
-          headers: { "Content-Type": "application/json" },
+          headers: corsHeaders(),
         });
       }
 
@@ -56,12 +56,19 @@ http.route({
         console.error("Failed to create conversation:", errText);
         return new Response(JSON.stringify({ error: "Failed to create AI conversation" }), {
           status: 500,
-          headers: { "Content-Type": "application/json" },
+          headers: corsHeaders(),
         });
       }
 
       const createData = await createRes.json();
       const conversationId = createData.value;
+
+      // Set thinking state on the edit
+      await ctx.runMutation(api.edits.setThinking, {
+        editId,
+        thinking: true,
+        silasConversationId: conversationId,
+      });
 
       // Send message to local model
       const sendRes = await fetch(`${SILAS_CONVEX_URL}/api/mutation`, {
@@ -83,13 +90,13 @@ http.route({
       if (!sendRes.ok) {
         const errText = await sendRes.text();
         console.error("Failed to send message:", errText);
+        await ctx.runMutation(api.edits.setThinking, { editId, thinking: false });
         return new Response(JSON.stringify({ error: "Failed to send to AI" }), {
           status: 500,
-          headers: { "Content-Type": "application/json" },
+          headers: corsHeaders(),
         });
       }
 
-      // Return the conversation ID so we can poll for response
       return new Response(
         JSON.stringify({
           success: true,
@@ -97,28 +104,19 @@ http.route({
           editId,
           message: "Processing with local Qwen model",
         }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-          },
-        }
+        { status: 200, headers: corsHeaders() }
       );
     } catch (error) {
       console.error("Error processing edit:", error);
       return new Response(
         JSON.stringify({ error: "Internal server error" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 500, headers: corsHeaders() }
       );
     }
   }),
 });
 
-// Poll for AI response and store it
+// Poll for AI response and stream updates
 http.route({
   path: "/poll-response",
   method: "POST",
@@ -130,8 +128,42 @@ http.route({
       if (!conversationId || !editId) {
         return new Response(JSON.stringify({ error: "Missing conversationId or editId" }), {
           status: 400,
-          headers: { "Content-Type": "application/json" },
+          headers: corsHeaders(),
         });
+      }
+
+      // Get conversation status from Silas Chat (includes streaming state)
+      const convoRes = await fetch(`${SILAS_CONVEX_URL}/api/query`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Convex ${SILAS_CONVEX_KEY}`,
+        },
+        body: JSON.stringify({
+          path: "conversations:get",
+          args: { id: conversationId },
+        }),
+      });
+
+      let streamingContent = "";
+      let isStreaming = false;
+
+      if (convoRes.ok) {
+        const convoData = await convoRes.json();
+        const convo = convoData.value;
+        if (convo) {
+          streamingContent = convo.streamingContent || "";
+          isStreaming = convo.streaming === true;
+
+          // Update streaming state on the edit
+          if (streamingContent || isStreaming) {
+            await ctx.runMutation(api.edits.updateStreaming, {
+              editId,
+              streaming: true,
+              streamingContent,
+            });
+          }
+        }
       }
 
       // Get messages from Silas Chat
@@ -150,28 +182,34 @@ http.route({
       if (!msgRes.ok) {
         return new Response(JSON.stringify({ error: "Failed to fetch messages" }), {
           status: 500,
-          headers: { "Content-Type": "application/json" },
+          headers: corsHeaders(),
         });
       }
 
       const msgData = await msgRes.json();
       const messages = msgData.value || [];
 
-      // Find assistant response
+      // Find assistant response (final message, not streaming)
       const assistantMsg = messages.find(
         (m: { role: string; content: string }) => m.role === "assistant"
       );
 
+      // If we have streaming content but no final message yet, show streaming
+      if (!assistantMsg && (streamingContent || isStreaming)) {
+        return new Response(
+          JSON.stringify({
+            status: "streaming",
+            streamingContent,
+            message: streamingContent || "🤔 Thinking...",
+          }),
+          { status: 200, headers: corsHeaders() }
+        );
+      }
+
       if (!assistantMsg) {
         return new Response(
           JSON.stringify({ status: "pending", message: "Waiting for AI response" }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*",
-            },
-          }
+          { status: 200, headers: corsHeaders() }
         );
       }
 
@@ -181,45 +219,42 @@ http.route({
         content: assistantMsg.content,
       });
 
+      // Clear streaming state
+      await ctx.runMutation(api.edits.clearStreaming, { editId });
+
       return new Response(
         JSON.stringify({
           status: "complete",
           response: assistantMsg.content,
         }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-          },
-        }
+        { status: 200, headers: corsHeaders() }
       );
     } catch (error) {
       console.error("Error polling response:", error);
       return new Response(
         JSON.stringify({ error: "Internal server error" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 500, headers: corsHeaders() }
       );
     }
   }),
 });
 
-// CORS preflight handler
+// CORS headers helper
+function corsHeaders(): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+}
+
+// CORS preflight handlers
 http.route({
   path: "/process-edit",
   method: "OPTIONS",
   handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
+    return new Response(null, { status: 204, headers: corsHeaders() });
   }),
 });
 
@@ -227,14 +262,7 @@ http.route({
   path: "/poll-response",
   method: "OPTIONS",
   handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
+    return new Response(null, { status: 204, headers: corsHeaders() });
   }),
 });
 
