@@ -15,6 +15,7 @@ import Video from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const CONVEX_URL = 'https://wary-panther-105.convex.cloud';
+const CONVEX_SITE_URL = 'https://wary-panther-105.convex.site';
 const SCREEN_W = Dimensions.get('window').width;
 
 type Message = {
@@ -49,6 +50,7 @@ export default function EditReviewView({ editId, onBack }: Props) {
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [aiThinking, setAiThinking] = useState(false);
   const [playingVideo, setPlayingVideo] = useState<string | null>(null);
   const [videoExpanded, setVideoExpanded] = useState(false);
 
@@ -108,8 +110,10 @@ export default function EditReviewView({ editId, onBack }: Props) {
 
     const text = inputText.trim();
     setSending(true);
+    setInputText('');
 
     try {
+      // 1. Save user message locally
       const res = await fetch(`${CONVEX_URL}/api/mutation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -119,10 +123,62 @@ export default function EditReviewView({ editId, onBack }: Props) {
         }),
       });
       if (!res.ok) throw new Error(`Send failed: ${res.status}`);
-      setInputText('');
       await fetchData();
+
+      // 2. Trigger AI processing with local Qwen model
+      setAiThinking(true);
+      const processRes = await fetch(`${CONVEX_SITE_URL}/process-edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ editId, message: text }),
+      });
+
+      if (!processRes.ok) {
+        console.error('AI processing failed:', await processRes.text());
+        setAiThinking(false);
+        return;
+      }
+
+      const processData = await processRes.json();
+      const { conversationId } = processData;
+
+      // 3. Poll for AI response
+      if (conversationId) {
+        let attempts = 0;
+        const maxAttempts = 60; // 60 seconds max for local model
+
+        const pollInterval = setInterval(async () => {
+          attempts++;
+          try {
+            const pollRes = await fetch(`${CONVEX_SITE_URL}/poll-response`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ conversationId, editId }),
+            });
+
+            if (pollRes.ok) {
+              const pollData = await pollRes.json();
+              if (pollData.status === 'complete') {
+                clearInterval(pollInterval);
+                setAiThinking(false);
+                await fetchData();
+              }
+            }
+          } catch (err) {
+            console.error('Poll error:', err);
+          }
+
+          if (attempts >= maxAttempts) {
+            clearInterval(pollInterval);
+            setAiThinking(false);
+          }
+        }, 1000);
+      } else {
+        setAiThinking(false);
+      }
     } catch (error) {
       console.error('Failed to send:', error);
+      setAiThinking(false);
     } finally {
       setSending(false);
     }
@@ -214,13 +270,14 @@ export default function EditReviewView({ editId, onBack }: Props) {
             </Text>
           </View>
         ) : (
-          messages.map((msg) => (
+          <>
+          {messages.map((msg) => (
             <View
               key={msg._id}
               style={[S.messageBubble, msg.role === 'user' ? S.userBubble : S.assistantBubble]}
             >
               {msg.role === 'assistant' && (
-                <Text style={S.assistantLabel}>Silas</Text>
+                <Text style={S.assistantLabel}>Qwen Local</Text>
               )}
               <Text style={[S.messageText, msg.role === 'user' && S.userText]}>
                 {msg.content}
@@ -253,7 +310,18 @@ export default function EditReviewView({ editId, onBack }: Props) {
                 </TouchableOpacity>
               )}
             </View>
-          ))
+          ))}
+          {/* AI Thinking indicator */}
+          {aiThinking && (
+            <View style={[S.messageBubble, S.assistantBubble]}>
+              <Text style={S.assistantLabel}>Qwen Local</Text>
+              <View style={S.thinkingRow}>
+                <ActivityIndicator size="small" color="#a29bfe" />
+                <Text style={S.thinkingText}>Thinking...</Text>
+              </View>
+            </View>
+          )}
+          </>
         )}
       </ScrollView>
 
@@ -479,4 +547,16 @@ const S = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: '#333' },
   sendBtnText: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
+
+  // AI thinking indicator
+  thinkingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  thinkingText: {
+    color: '#a29bfe',
+    fontSize: 14,
+    marginLeft: 8,
+    fontStyle: 'italic',
+  },
 });

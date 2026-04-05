@@ -12,6 +12,7 @@ import type * as approvals from "../approvals.js";
 import type * as clips from "../clips.js";
 import type * as editMessages from "../editMessages.js";
 import type * as edits from "../edits.js";
+import type * as http from "../http.js";
 
 import type {
   ApiFromModules,
@@ -24,6 +25,7 @@ declare const fullApi: ApiFromModules<{
   clips: typeof clips;
   editMessages: typeof editMessages;
   edits: typeof edits;
+  http: typeof http;
 }>;
 
 /**
