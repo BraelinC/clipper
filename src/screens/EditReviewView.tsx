@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   StyleSheet,
   View,
@@ -9,11 +9,13 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
 import Video from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const CONVEX_URL = 'https://wary-panther-105.convex.cloud';
+const SCREEN_W = Dimensions.get('window').width;
 
 type Message = {
   _id: string;
@@ -30,6 +32,7 @@ type Edit = {
   status: string;
   clipTitle: string;
   clipUrl?: string;
+  outputUrl?: string;
 };
 
 type Props = {
@@ -40,32 +43,47 @@ type Props = {
 export default function EditReviewView({ editId, onBack }: Props) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
-  
+
   const [edit, setEdit] = useState<Edit | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [playingVideo, setPlayingVideo] = useState<string | null>(null);
+  const [videoExpanded, setVideoExpanded] = useState(false);
+
+  // Find the latest AI video from messages (most recent assistant message with videoUrl)
+  const latestAiVideo = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant' && messages[i].videoUrl) {
+        return messages[i].videoUrl!;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  // The video to show in the preview: latest AI edit > edit outputUrl > original clip
+  const currentVideoUrl = latestAiVideo || edit?.outputUrl || edit?.clipUrl;
+  const videoLabel = latestAiVideo ? 'AI Edit' : edit?.outputUrl ? 'Edited' : 'Original';
 
   // Fetch edit details and messages
   const fetchData = async () => {
     try {
-      // Fetch edit
       const editRes = await fetch(`${CONVEX_URL}/api/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: 'edits:get', args: { editId } }),
       });
+      if (!editRes.ok) throw new Error(`Edit fetch failed: ${editRes.status}`);
       const editData = await editRes.json();
       if (editData.value) setEdit(editData.value);
 
-      // Fetch messages
       const msgRes = await fetch(`${CONVEX_URL}/api/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: 'editMessages:list', args: { editId } }),
       });
+      if (!msgRes.ok) throw new Error(`Messages fetch failed: ${msgRes.status}`);
       const msgData = await msgRes.json();
       setMessages(msgData.value || []);
     } catch (error) {
@@ -77,25 +95,22 @@ export default function EditReviewView({ editId, onBack }: Props) {
 
   useEffect(() => {
     fetchData();
-    // Poll for new messages every 3 seconds
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
   }, [editId]);
 
   useEffect(() => {
-    // Scroll to bottom when messages change
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [messages]);
 
   const sendMessage = async () => {
     if (!inputText.trim() || sending) return;
-    
+
     const text = inputText.trim();
-    setInputText('');
     setSending(true);
 
     try {
-      await fetch(`${CONVEX_URL}/api/mutation`, {
+      const res = await fetch(`${CONVEX_URL}/api/mutation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -103,13 +118,20 @@ export default function EditReviewView({ editId, onBack }: Props) {
           args: { editId, content: text },
         }),
       });
-      
-      // Refresh messages
+      if (!res.ok) throw new Error(`Send failed: ${res.status}`);
+      setInputText('');
       await fetchData();
     } catch (error) {
       console.error('Failed to send:', error);
     } finally {
       setSending(false);
+    }
+  };
+
+  const toggleVideoExpand = () => {
+    setVideoExpanded(!videoExpanded);
+    if (!videoExpanded && currentVideoUrl) {
+      setPlayingVideo(currentVideoUrl);
     }
   };
 
@@ -124,7 +146,7 @@ export default function EditReviewView({ editId, onBack }: Props) {
   }
 
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       style={[S.root, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
@@ -139,36 +161,50 @@ export default function EditReviewView({ editId, onBack }: Props) {
         <View style={{ width: 60 }} />
       </View>
 
-      {/* Original Video Preview */}
-      {edit?.clipUrl && (
-        <TouchableOpacity 
-          style={S.originalPreview}
-          onPress={() => setPlayingVideo(playingVideo === edit.clipUrl ? null : edit.clipUrl)}
-        >
-          <Video
-            source={{ uri: edit.clipUrl }}
-            style={S.previewVideo}
-            resizeMode="cover"
-            paused={playingVideo !== edit.clipUrl}
-            repeat
-            muted={playingVideo !== edit.clipUrl}
-          />
-          <View style={S.previewOverlay}>
-            <Text style={S.previewLabel}>Original</Text>
-            <Text style={S.playIcon}>{playingVideo === edit.clipUrl ? '⏸' : '▶️'}</Text>
-          </View>
-        </TouchableOpacity>
+      {/* Video Preview — expandable */}
+      {currentVideoUrl && (
+        <View style={[S.videoSection, videoExpanded && S.videoSectionExpanded]}>
+          <TouchableOpacity
+            style={[S.videoContainer, videoExpanded && S.videoContainerExpanded]}
+            activeOpacity={0.9}
+            onPress={() => setPlayingVideo(playingVideo === currentVideoUrl ? null : currentVideoUrl)}
+          >
+            <Video
+              source={{ uri: currentVideoUrl }}
+              style={S.previewVideo}
+              resizeMode={videoExpanded ? 'contain' : 'cover'}
+              paused={playingVideo !== currentVideoUrl}
+              repeat
+              muted={playingVideo !== currentVideoUrl}
+            />
+            {playingVideo !== currentVideoUrl && (
+              <View style={S.previewOverlay}>
+                <Text style={S.bigPlayIcon}>▶️</Text>
+              </View>
+            )}
+            {/* Label badge */}
+            <View style={[S.labelBadge, latestAiVideo ? S.labelAi : S.labelOriginal]}>
+              <Text style={S.labelText}>{videoLabel}</Text>
+            </View>
+          </TouchableOpacity>
+
+          {/* Expand/collapse toggle */}
+          <TouchableOpacity style={S.expandBtn} onPress={toggleVideoExpand}>
+            <Text style={S.expandIcon}>{videoExpanded ? '▲' : '▼'}</Text>
+            <Text style={S.expandText}>{videoExpanded ? 'Collapse' : 'Expand'}</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       {/* Chat Messages */}
-      <ScrollView 
+      <ScrollView
         ref={scrollRef}
         style={S.chatContainer}
         contentContainerStyle={S.chatContent}
       >
         {messages.length === 0 ? (
           <View style={S.emptyChat}>
-            <Text style={S.emptyChatText}>👋 Tell me how you want to edit this video!</Text>
+            <Text style={S.emptyChatText}>Tell me how you want to edit this video!</Text>
             <Text style={S.emptyChatHint}>
               Examples:{'\n'}
               • "Add captions"{'\n'}
@@ -179,20 +215,22 @@ export default function EditReviewView({ editId, onBack }: Props) {
           </View>
         ) : (
           messages.map((msg) => (
-            <View 
-              key={msg._id} 
+            <View
+              key={msg._id}
               style={[S.messageBubble, msg.role === 'user' ? S.userBubble : S.assistantBubble]}
             >
               {msg.role === 'assistant' && (
-                <Text style={S.assistantLabel}>🤖 Silas</Text>
+                <Text style={S.assistantLabel}>Silas</Text>
               )}
               <Text style={[S.messageText, msg.role === 'user' && S.userText]}>
                 {msg.content}
               </Text>
               {msg.videoUrl && (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={S.videoMessage}
-                  onPress={() => setPlayingVideo(playingVideo === msg.videoUrl ? null : msg.videoUrl)}
+                  onPress={() => {
+                    setPlayingVideo(playingVideo === msg.videoUrl ? null : msg.videoUrl);
+                  }}
                 >
                   <Video
                     source={{ uri: msg.videoUrl }}
@@ -206,6 +244,12 @@ export default function EditReviewView({ editId, onBack }: Props) {
                       {playingVideo === msg.videoUrl ? '⏸' : '▶️'}
                     </Text>
                   </View>
+                  {/* Indicator that this is the current preview video */}
+                  {msg.videoUrl === latestAiVideo && (
+                    <View style={S.currentBadge}>
+                      <Text style={S.currentBadgeText}>Current</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
               )}
             </View>
@@ -224,7 +268,7 @@ export default function EditReviewView({ editId, onBack }: Props) {
           multiline
           maxLength={500}
         />
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[S.sendBtn, (!inputText.trim() || sending) && S.sendBtnDisabled]}
           onPress={sendMessage}
           disabled={!inputText.trim() || sending}
@@ -242,9 +286,9 @@ export default function EditReviewView({ editId, onBack }: Props) {
 
 const S = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#1a1a2e' },
-  
+
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -258,46 +302,85 @@ const S = StyleSheet.create({
   backText: { color: '#6c5ce7', fontSize: 16, fontWeight: '600' },
   headerTitle: { flex: 1, color: '#fff', fontSize: 16, fontWeight: '600', textAlign: 'center' },
 
-  originalPreview: {
-    height: 120,
-    marginHorizontal: 15,
-    marginVertical: 10,
+  // Video section
+  videoSection: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 4,
     borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: '#000',
   },
+  videoSectionExpanded: {
+    marginHorizontal: 0,
+    marginTop: 0,
+    borderRadius: 0,
+  },
+  videoContainer: {
+    height: 120,
+  },
+  videoContainerExpanded: {
+    height: SCREEN_W * (16 / 9),
+    maxHeight: 400,
+  },
   previewVideo: { width: '100%', height: '100%' },
   previewOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: 'rgba(0,0,0,0.35)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  previewLabel: {
+  bigPlayIcon: { fontSize: 40 },
+
+  labelBadge: {
     position: 'absolute',
     top: 8,
     left: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  labelOriginal: {
+    backgroundColor: 'rgba(108, 92, 231, 0.8)',
+  },
+  labelAi: {
+    backgroundColor: 'rgba(232, 67, 147, 0.85)',
+  },
+  labelText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: '600',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
+    fontWeight: '700',
   },
-  playIcon: { fontSize: 30 },
+
+  expandBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  expandIcon: {
+    color: '#a29bfe',
+    fontSize: 12,
+    marginRight: 6,
+  },
+  expandText: {
+    color: '#a29bfe',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 
   chatContainer: { flex: 1 },
   chatContent: { padding: 15, paddingBottom: 20 },
 
-  emptyChat: { 
-    alignItems: 'center', 
+  emptyChat: {
+    alignItems: 'center',
     paddingVertical: 40,
     paddingHorizontal: 20,
   },
-  emptyChatText: { 
-    color: '#fff', 
-    fontSize: 18, 
+  emptyChatText: {
+    color: '#fff',
+    fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
     marginBottom: 15,
@@ -349,6 +432,21 @@ const S = StyleSheet.create({
     alignItems: 'center',
   },
   videoPlayIcon: { fontSize: 40 },
+
+  currentBadge: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(232, 67, 147, 0.85)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  currentBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
 
   inputBar: {
     flexDirection: 'row',

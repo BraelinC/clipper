@@ -8,6 +8,7 @@ export const list = query({
     return await ctx.db
       .query("editMessages")
       .withIndex("by_edit", (q) => q.eq("editId", args.editId))
+      .order("asc")
       .collect();
   },
 });

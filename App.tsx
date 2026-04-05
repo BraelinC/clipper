@@ -72,7 +72,7 @@ function App() {
         <StatusBar barStyle="light-content" backgroundColor="#1a1a2e" />
 
         {/* Screen Content */}
-        {activeTab === 'record' && <AppContent />}
+        {activeTab === 'record' && <AppContent onNavigateToEdits={(editId) => { setSelectedEditId(editId); setActiveTab('edits'); }} />}
         {activeTab === 'edits' && !selectedEditId && (
           <EditsScreen onSelectEdit={(id) => setSelectedEditId(id)} />
         )}
@@ -384,7 +384,7 @@ const FS = StyleSheet.create({
 
 // ==================== MAIN APP ====================
 
-function AppContent() {
+function AppContent({ onNavigateToEdits }: { onNavigateToEdits: (editId: string) => void }) {
   const insets = useSafeAreaInsets();
   const [isRecording, setIsRecording] = useState(false);
   const [videoPath, setVideoPath] = useState<string | null>(null);
@@ -677,33 +677,37 @@ function AppContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           path: 'clips:create',
-          args: { 
-            title, 
-            url, 
+          args: {
+            title,
+            url,
             source: 'recorded',
             duration: duration > 0 ? duration : undefined,
           },
         }),
       });
+      if (!clipResponse.ok) throw new Error('Failed to create clip');
       const clipData = await clipResponse.json();
       const clipId = clipData.value;
-      
+      if (!clipId) throw new Error('No clip ID returned');
+
       // 3. Create edit request in Convex
-      await fetch(`${CONVEX_URL}/api/mutation`, {
+      const editResponse = await fetch(`${CONVEX_URL}/api/mutation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           path: 'edits:create',
-          args: { 
+          args: {
             clipId,
             prompt: 'Awaiting AI edit instructions',
-            status: 'pending',
           },
         }),
       });
-      
+      if (!editResponse.ok) throw new Error('Failed to create edit');
+      const editData = await editResponse.json();
+      const editId = editData.value;
+
       setSendingForEdit(false);
-      Alert.alert('Sent!', 'Video sent to Edits tab. Check the Edits tab to review when AI processing is complete.');
+      onNavigateToEdits(editId);
     } catch (e: any) { 
       setSendingForEdit(false); 
       Alert.alert('Failed', e?.message || 'Could not send for editing'); 
